@@ -16,9 +16,22 @@ void verifiesModularStructure() {
 }
 ```
 
-A module's root package is its public API; everything in its `internal` sub-package is
-invisible to other modules, and reaching into it fails the build. Cross-module access
-that is not declared fails the build.
+Modulith exposes a module's base package and treats every sub-package as internal
+unless that package is annotated `@NamedInterface`. Each module is split by role —
+`port/`, `usecase/`, `domain/`, `store/`, `web/` — and **only `port/` carries the
+annotation**, so everything else is genuinely unreachable from outside the module.
+Reaching past a port fails the build.
+
+Dependencies therefore name the interface rather than the module:
+
+```java
+@ApplicationModule(allowedDependencies = { "links::port", "analytics::port", "shared" })
+```
+
+Declaring `"links"` would leave `redirect` free to call `CreateLinkUseCase`;
+`"links::port"` narrows it to the one type it is supposed to use. This is the whole
+reason the role split is a package boundary rather than a naming convention: moving a
+type into or out of `port/` changes what other modules can compile against.
 
 The reason for the decision is narrow: **a boundary that lives only in a document is
 not a boundary.** This project's whole premise is that design decisions are written
@@ -44,8 +57,14 @@ being true within a week.
 - **Modulith verifies code dependencies, not data dependencies.** Two modules querying
   the same table is a real coupling that this test will never catch. Stated here
   because the test's green tick is otherwise easy to over-read.
-- Controllers live in `internal/web`. Nothing outside a module calls its controllers,
-  so they are not module API.
+- **There is no `internal/` package.** An earlier draft used the common Modulith
+  convention of a single `internal` sub-package. Named interfaces make it redundant:
+  "everything except `port/` is private" is both shorter and actually checked, where
+  `internal/` was a naming habit one level deeper that Modulith enforced no harder. The
+  cost is that `internal/` is the convention most Modulith readers expect, so the rule
+  is stated explicitly in the backend's `CLAUDE.md` rather than left to recognition.
+- Controllers live in `web/`. Nothing outside a module calls a controller, so a
+  controller is never module API.
 - The `-core` and `-test` starters only. The **event publication registry**
   (`spring-modulith-events-jdbc`) is deliberately excluded: it solves reliable
   asynchronous event delivery, and [ADR-0005](./0005-synchronous-click-recording.md)
