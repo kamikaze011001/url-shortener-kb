@@ -49,7 +49,18 @@ more here than the implementation would be in the demo*.
   effectively private and rate limits cap the blast radius — neither is a defence.
 - Private-address checking must happen **after DNS resolution, not on the string**, or
   a hostname resolving to a private address walks straight through. This is the way the
-  rule is usually implemented wrongly.
+  rule is usually implemented wrongly, and it is the case the tests exist to pin down:
+  `localtest.me` is a public domain whose A record is `127.0.0.1`, and a string-based
+  screener passes every other test while letting it through.
+- **Resolution failure fails closed.** An unresolvable host is refused rather than
+  accepted. Creation is not latency-critical, and accepting links to nowhere is worse
+  than occasionally refusing a domain whose DNS is having a bad day. The cost is real
+  and accepted: a valid destination can be rejected because our resolver, not the
+  destination, was unavailable.
+- **DNS resolution is bounded to 2 seconds.** `InetAddress.getAllByName` has no timeout
+  of its own, so a slow resolver would otherwise hang a request indefinitely — on a
+  process that also serves Redirects. A timeout is treated as a resolution failure and
+  therefore also fails closed.
 - There remains a DNS-rebinding gap: a hostname can resolve to a public address at
   creation and a private one at redirect time. Closing it means re-resolving on every
   redirect, which is unacceptable on a 20 ms path. Documented, not fixed.
