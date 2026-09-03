@@ -210,7 +210,7 @@ checks; see [ADR-0010](./adr/0010-defer-external-url-screening.md).
 
 | Choice | Why this, not the obvious alternative |
 |---|---|
-| **Java 21 + Spring Boot 3.4** | Fluency. The fastest stack to finish in beats the theoretically best one. |
+| **Java 21 + Spring Boot 4.1** | Fluency. The fastest stack to finish in beats the theoretically best one. Boot **4** rather than the 3.4 originally planned: Spring Initializr no longer offers any 3.x release, so this was chosen for us. It brings Spring Security 7, whose configuration API differs from 3.x. |
 | **Spring MVC + virtual threads** | Not WebFlux. The bottleneck is I/O concurrency, not thread memory — [ADR-0001](./adr/0001-mvc-virtual-threads-over-webflux.md) |
 | **Spring Modulith (`-core`, `-test`)** | Module boundaries fail the build instead of rotting in a document — [ADR-0012](./adr/0012-modulith-verified-boundaries.md). Event registry deliberately excluded. |
 | **One class per use case** | Not a service layer — [ADR-0011](./adr/0011-one-class-per-use-case.md) |

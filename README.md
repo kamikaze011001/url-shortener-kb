@@ -9,7 +9,7 @@ with this repository, **the implementation is wrong**.
 | Repo | Role |
 |---|---|
 | [`url-shortener-kb`](https://github.com/kamikaze011001/url-shortener-kb) | This repo. Requirements, design, contract, decisions. |
-| [`url-shortener-backend`](https://github.com/kamikaze011001/url-shortener-backend) | Java 21 / Spring Boot 3.4 API + redirect service. |
+| [`url-shortener-backend`](https://github.com/kamikaze011001/url-shortener-backend) | Java 21 / Spring Boot 4.1 API + redirect service. |
 | [`url-shortener-frontend`](https://github.com/kamikaze011001/url-shortener-frontend) | Vite + React + TypeScript dashboard. |
 
 ## How to navigate
