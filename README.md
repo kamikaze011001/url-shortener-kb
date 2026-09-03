@@ -43,6 +43,8 @@ Every entry below was a genuine trade-off with a rejected alternative.
 | [0008](./docs/adr/0008-soft-delete-and-uniform-404.md) | Soft delete, codes never recycled, uniform 404 |
 | [0009](./docs/adr/0009-mutable-destination-with-audit.md) | Destinations are mutable, with an audit trail |
 | [0010](./docs/adr/0010-defer-external-url-screening.md) | Built-in SSRF guard now; external URL screening deferred behind an interface |
+| [0011](./docs/adr/0011-one-class-per-use-case.md) | One class per use case; no service layer |
+| [0012](./docs/adr/0012-modulith-verified-boundaries.md) | Module boundaries verified by Spring Modulith, not asserted |
 
 ## Project constraints
 

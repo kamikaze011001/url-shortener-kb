@@ -8,20 +8,44 @@ management API would buy independent scaling nobody needs and cost a network hop
 the one path that matters.
 
 The split is real, but it lives at the **module** level inside one process, so that
-extracting it later is a refactor rather than a rewrite:
+extracting it later is a refactor rather than a rewrite. Modules are enforced by
+Spring Modulith, not merely described here — see
+[ADR-0012](./adr/0012-modulith-verified-boundaries.md).
 
 ```
-url-shortener-backend/
-  redirect/      ← the hot path. Read-only against Links. No dependency on management.
-  links/         ← create, edit, disable, delete. Owns the Link.
-  analytics/     ← recording Clicks and reading statistics.
-  identity/      ← Owners, registration, login, session.
-  shared/        ← error model, IP resolution, config.
+com.<org>.urlshortener
+├── shared/                    error model, ids, clock, ClientIpResolver
+├── identity/                  Owners, registration, login, session
+│   ├── RegisterOwnerUseCase       ← module API
+│   ├── LoginUseCase
+│   └── internal/                  ← invisible to other modules
+│       ├── OwnerRepository, OwnerEntity, JwtIssuer
+│       └── web/                   ← controllers
+├── links/                     create, edit, disable, delete. Owns the Link.
+│   ├── CreateLinkUseCase, UpdateLinkUseCase, DeleteLinkUseCase, ListLinksUseCase
+│   ├── LinkLookup                 ← the port redirect is allowed to use
+│   └── internal/
+├── redirect/                  the hot path
+│   ├── ResolveShortCodeUseCase
+│   └── internal/
+└── analytics/                 recording Clicks, reading statistics
+    ├── ClickRecorder              ← the seam from ADR-0005
+    ├── GetLinkStatsUseCase
+    └── internal/
 ```
 
-`redirect` depends on nothing but `shared` and its own read model. That is the seam
-along which the service would be split if the redirect path ever needed to scale
-independently, and keeping it clean costs nothing today.
+`redirect` declares `@ApplicationModule(allowedDependencies = {"links", "shared"})`
+and reaches `links` only through the `LinkLookup` port. It deliberately does **not**
+query the `links` table itself: doing so would let it claim zero code dependencies
+while carrying a hidden data dependency, which is worse, not better. The port is the
+seam along which the service would be split if the redirect path ever needed to scale
+independently — extraction turns a method call into a network call rather than a
+rewrite.
+
+Business logic lives in **one class per use case**, not in a service layer. Each has a
+nested `Command` and `Result` record and a single `execute` method; controllers map
+HTTP to a `Command` and back, and contain nothing else. See
+[ADR-0011](./adr/0011-one-class-per-use-case.md).
 
 ## Containers
 
@@ -188,6 +212,10 @@ checks; see [ADR-0010](./adr/0010-defer-external-url-screening.md).
 |---|---|
 | **Java 21 + Spring Boot 3.4** | Fluency. The fastest stack to finish in beats the theoretically best one. |
 | **Spring MVC + virtual threads** | Not WebFlux. The bottleneck is I/O concurrency, not thread memory — [ADR-0001](./adr/0001-mvc-virtual-threads-over-webflux.md) |
+| **Spring Modulith (`-core`, `-test`)** | Module boundaries fail the build instead of rotting in a document — [ADR-0012](./adr/0012-modulith-verified-boundaries.md). Event registry deliberately excluded. |
+| **One class per use case** | Not a service layer — [ADR-0011](./adr/0011-one-class-per-use-case.md) |
+| **Micrometer Tracing (otel bridge), no exporter** | Standard, propagating `traceId` in MDC for the same effort as a hand-rolled request id |
+| **logstash-logback-encoder** | Logs queried by field, not by regex |
 | **Postgres 16** | Single source of truth. Nothing here needs a document store or a wide-column store, and a unique constraint is the cheapest collision detector available. |
 | **JPA for management, JdbcTemplate for redirect** | The redirect is one indexed row read. An entity manager, dirty checking and a persistence context are pure overhead on the one path with a latency budget. |
 | **Flyway** | Migrations are versioned artefacts, applied identically on a laptop and in production. |
@@ -196,6 +224,77 @@ checks; see [ADR-0010](./adr/0010-defer-external-url-screening.md).
 | **Caddy** | Static file serving plus an `/api` reverse proxy in ~8 lines, no TLS config needed since Cloudflare terminates. |
 | **Vite + React + TS + Tailwind + shadcn/ui** | Static bundle; SSR would buy nothing here and would add a Node container. shadcn gives a credible dashboard in the ~3 hours the frontend gets. |
 | **TanStack Query** | Server state has caching, retry and invalidation requirements that `useState` does not. |
+
+## Observability and logging
+
+The requirement is that a **complete business flow can be reconstructed from the
+logs** — not that everything is logged. Undisciplined logging produces thousands of
+lines nobody reads and is indistinguishable from no logging at all. Four pieces:
+
+### Correlation comes from Micrometer Tracing, not a hand-rolled request id
+
+`micrometer-tracing-bridge-otel`, with **no exporter configured** — no Jaeger, no
+Zipkin, no extra container. `traceId` and `spanId` land in MDC automatically, in the
+standard format, propagated correctly across any future service boundary. Adding an
+exporter later is configuration, not a change to any log statement.
+
+Generating a UUID per request would be the same effort for a non-standard,
+non-propagating result.
+
+Behind Cloudflare, the `CF-Ray` header is also recorded as a field. It is the join key
+between these logs and Cloudflare's own — the only way to answer "the edge saw it, did
+we?" once deployed.
+
+### Structured JSON, with domain fields in MDC
+
+`logstash-logback-encoder`. A filter puts `ownerId` and, where known, `linkId` and
+`code` into MDC, so every line inside a request carries them without being passed
+around. Logs are queried by field, never by regular expression.
+
+### One deliberate business event per meaningful outcome
+
+This is what makes a flow traceable, as opposed to an access log with extra steps.
+Each is a single INFO line with a stable `event` field:
+
+| `event` | Fields |
+|---|---|
+| `link.created` | `code`, `isCustomAlias`, `ownerId` |
+| `link.create_rejected` | `reason` = `DESTINATION_NOT_ALLOWED` \| `ALIAS_TAKEN` \| `RESERVED_ALIAS` |
+| `link.redirected` | `code`, `linkId`, `cacheHit` |
+| `link.redirect_missed` | `code`, `reason` = `NOT_FOUND` \| `DISABLED` \| `EXPIRED` \| `DELETED` |
+| `link.destination_changed` | `linkId`, `from`, `to` |
+| `auth.login_failed` | `email` |
+| `ratelimit.rejected` | `bucket`, `limit` |
+| `code.collision_retry` | `attempt` |
+
+`link.redirect_missed` carries the **real** reason while the HTTP response stays a
+uniform `404`. That is the debuggability cost accepted by
+[ADR-0008](./adr/0008-soft-delete-and-uniform-404.md), repaid in the one place where
+it is safe to repay it.
+
+### A single aspect around every use case
+
+An `@Around` advice on `*UseCase.execute(..)` logs entry, outcome and duration, and
+puts the use-case name into MDC. About thirty lines, and every use case is
+instrumented without one hand-written log statement.
+
+This works only because every use case has the same shape — an unplanned return on
+[ADR-0011](./adr/0011-one-class-per-use-case.md). A service layer of fifteen
+differently-shaped methods could not be instrumented this way.
+
+### Never logged
+
+Follows directly from [02-nfr.md § Privacy](./02-nfr.md): passwords, JWTs, the
+`Cookie` header, and **raw IP addresses**. Promising that IPs are never stored and then
+writing them to a log file would be a distinction without a difference. Where
+correlation is needed, the first 8 characters of `ip_hash` are logged instead.
+
+### Now versus later
+
+One INFO line per Redirect is right at the Real scale and is ~2,000 lines/second at the
+Paper scale. At that point redirect logging is sampled or dropped to DEBUG, and the
+business events above become metrics rather than lines. Tracked as
+[R-11](./06-roadmap.md).
 
 ## Deployment
 

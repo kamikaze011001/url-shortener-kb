@@ -115,6 +115,17 @@ edge without ever reaching the origin. Writes push to KV; deletions and edits pu
 it. The Click recording then has to happen at the edge too, which is a genuinely
 different analytics architecture — this is the largest single change on this page.
 
+### R-11 — Sample redirect logging
+
+**Trigger:** redirect traffic above ~50 RPS sustained, or log volume becoming a disk
+or ingest cost.
+
+One INFO line per Redirect is the right choice at the Real scale and is roughly 2,000
+lines per second at the Paper scale. The fix is to sample `link.redirected` (1 in N) or
+drop it to DEBUG, and let the Prometheus counters carry what the lines were carrying.
+`link.redirect_missed` stays at INFO — failures are rare and individually interesting,
+which is exactly the asymmetry that makes sampling safe.
+
 ## Stage 3 — Changes that are decisions, not scaling
 
 Not triggered by load. Triggered by wanting a different product.
