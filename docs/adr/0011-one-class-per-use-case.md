@@ -59,6 +59,12 @@ its own sake, and repositories are called directly. Only the service layer chang
   logging aspect in [03-architecture.md](../03-architecture.md) possible. A service
   layer of differently-shaped methods could not be instrumented the same way. That was
   not the reason for the decision, but it is a real return on it.
+- **`@Transactional` goes on `execute()`** — one business operation, one transaction,
+  by construction rather than by review. Where a use case is deliberately *not*
+  transactional, its javadoc must say why: the redirect path is the only such case
+  today ([ADR-0005](./0005-synchronous-click-recording.md)), and without the note the
+  next reader adds the annotation and reintroduces the bug it was avoiding. An absent
+  annotation looks like an oversight; only the comment distinguishes the two.
 - Reversing this means merging classes back into services — mechanical, but it touches
   every controller. Recorded so a future reader does not assume the service layer was
   simply forgotten.

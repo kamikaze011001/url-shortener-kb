@@ -12,40 +12,67 @@ extracting it later is a refactor rather than a rewrite. Modules are enforced by
 Spring Modulith, not merely described here — see
 [ADR-0012](./adr/0012-modulith-verified-boundaries.md).
 
+Two axes divide the code. **Modules** divide by subject; **role packages** divide by
+what a class talks to. Every class has exactly one of each, so its path says what it is.
+
 ```
 com.<org>.urlshortener
-├── shared/                    error model, ids, clock, ClientIpResolver
+├── shared/                    open module — every module may use all of it
+│   ├── config/                AppProperties, SecurityConfig, clock
+│   ├── error/                 ApiException, ProblemCode, the RFC 9457 handler
+│   └── http/                  client IP and country resolution
 ├── identity/                  Owners, registration, login, session
-│   ├── RegisterOwnerUseCase       ← module API
-│   ├── LoginUseCase
-│   └── internal/                  ← invisible to other modules
-│       ├── OwnerRepository, OwnerEntity, JwtIssuer
-│       └── web/                   ← controllers
 ├── links/                     create, edit, disable, delete. Owns the Link.
-│   ├── CreateLinkUseCase, UpdateLinkUseCase, DeleteLinkUseCase, ListLinksUseCase
-│   ├── LinkLookup                 ← the port redirect is allowed to use
-│   └── internal/
-├── redirect/                  the hot path
-│   ├── ResolveShortCodeUseCase
-│   └── internal/
+│   ├── port/                  ← the ONLY thing other modules may touch
+│   │   └── LinkLookup
+│   ├── usecase/               CreateLinkUseCase, UpdateLinkUseCase, ...
+│   ├── domain/                ShortCodeGenerator, DestinationScreener
+│   ├── store/                 database edge
+│   └── web/                   HTTP edge: controllers, wire records
+├── redirect/                  the hot path — usecase/, web/
 └── analytics/                 recording Clicks, reading statistics
-    ├── ClickRecorder              ← the seam from ADR-0005
-    ├── GetLinkStatsUseCase
-    └── internal/
+    ├── port/ClickRecorder     ← the seam from ADR-0005
+    ├── usecase/GetLinkStatsUseCase
+    └── store/
 ```
 
-`redirect` declares `@ApplicationModule(allowedDependencies = {"links", "shared"})`
-and reaches `links` only through the `LinkLookup` port. It deliberately does **not**
-query the `links` table itself: doing so would let it claim zero code dependencies
-while carrying a hidden data dependency, which is worse, not better. The port is the
-seam along which the service would be split if the redirect path ever needed to scale
-independently — extraction turns a method call into a network call rather than a
-rewrite.
+| Role package | Talks to | Holds |
+|---|---|---|
+| `port/` | other modules | Interfaces other modules call, and their record types |
+| `usecase/` | — | One class per business operation |
+| `domain/` | nothing external | Generators, screeners, encoders |
+| `store/` | the database | Row mappers, writers, repositories, entities |
+| `web/` | HTTP | Controllers, request and response records |
+
+A class in `store/` that formats an HTTP response, or one in `web/` that writes SQL, is
+in the wrong package. That is the whole test.
+
+**The role split is enforced, not agreed.** Modulith exposes a module's base package
+and treats sub-packages as internal unless annotated `@NamedInterface`. Only `port/`
+carries that annotation, so use cases, controllers and stores are genuinely unreachable
+from other modules — and dependencies name the interface rather than the module:
+
+```java
+@ApplicationModule(allowedDependencies = { "links::port", "analytics::port", "shared" })
+```
+
+Declaring `"links"` would leave `redirect` free to call `CreateLinkUseCase`;
+`"links::port"` does not. `redirect` also deliberately does **not** query the `links`
+table: doing so would let it claim zero code dependencies while carrying a hidden data
+dependency, which is worse, not better. The port is the seam along which the service
+would be split if the redirect path ever needed to scale independently — extraction
+turns a method call into a network call rather than a rewrite.
 
 Business logic lives in **one class per use case**, not in a service layer. Each has a
 nested `Command` and `Result` record and a single `execute` method; controllers map
 HTTP to a `Command` and back, and contain nothing else. See
 [ADR-0011](./adr/0011-one-class-per-use-case.md).
+
+`@Transactional` goes on `execute()`: one business operation, one transaction. The
+redirect path is the deliberate exception — a transaction there would let a failed
+Click insert mark it rollback-only, so an analytics failure would reach back into a
+Redirect. `ClickRecorder` therefore commits with `REQUIRES_NEW`, so that guarantee
+survives a future transactional caller rather than depending on every caller behaving.
 
 ## Containers
 

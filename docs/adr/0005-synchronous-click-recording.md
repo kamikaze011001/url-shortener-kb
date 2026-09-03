@@ -47,6 +47,14 @@ event rows are the data.
   [02-nfr.md](../02-nfr.md) requires that a Redirect never fails because analytics
   failed. `SyncClickRecorder` therefore catches and logs everything, and increments a
   failure metric rather than propagating.
+- **Recording commits in its own transaction (`REQUIRES_NEW`), not the caller's.**
+  Found while implementing: with the default `REQUIRED` propagation, a failed insert
+  inside a transactional caller would mark that transaction rollback-only — so an
+  analytics failure would reach back into the Redirect through the transaction manager,
+  even though no exception ever crossed the interface. The catch block alone does not
+  deliver the guarantee this ADR claims; the propagation setting does. Correspondingly,
+  the redirect use case is deliberately **not** `@Transactional`, and says so in its
+  javadoc so the annotation is not "restored" by a later reader.
 - Recording happens *after* the redirect response is determined, so a slow insert
   delays the response but can never change it.
 - The eventual `QueuedClickRecorder` will lose at most one unflushed batch on a hard
