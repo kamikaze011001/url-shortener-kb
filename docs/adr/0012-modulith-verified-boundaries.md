@@ -27,12 +27,20 @@ being true within a week.
 
 ## Consequences
 
-- **`redirect` depends on a `links.LinkLookup` port**, declared as
-  `@ApplicationModule(allowedDependencies = {"links", "shared"})`. An earlier draft of
-  the architecture claimed `redirect` depended on nothing but `shared`; that was only
-  achievable by having `redirect` query the `links` table directly, which trades a
-  visible code dependency for an invisible data one. The port is the honest version,
-  and extraction later turns it into a network call rather than a rewrite.
+- **`redirect` reaches other modules only through ports**, declared as
+  `@ApplicationModule(allowedDependencies = {"links", "analytics", "shared"})`: the
+  `links.LinkLookup` port to resolve a Short Code, and the `analytics.ClickRecorder`
+  port to record the Click. An earlier draft of the architecture claimed `redirect`
+  depended on nothing but `shared`; that was only achievable by having `redirect` query
+  the `links` table directly, which trades a visible code dependency for an invisible
+  data one. The ports are the honest version, and extraction later turns a method call
+  into a network call rather than a rewrite.
+
+  > This ADR originally listed `{"links", "shared"}` and omitted `analytics`, which was
+  > simply wrong — a Redirect records a Click, so the dependency was always there. The
+  > error surfaced the moment the modules were declared in code, which is an argument
+  > for [ADR-0012](./0012-modulith-verified-boundaries.md) rather than against it: a
+  > dependency list nothing checks is a dependency list nobody gets right.
 - **Modulith verifies code dependencies, not data dependencies.** Two modules querying
   the same table is a real coupling that this test will never catch. Stated here
   because the test's green tick is otherwise easy to over-read.
