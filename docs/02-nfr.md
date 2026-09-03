@@ -114,6 +114,12 @@ Storing the hash instead costs one function call and removes the entire category
 "what happens when this database leaks". User agents are stored raw but only to derive
 a device class, and are truncated to 512 characters.
 
+**This extends to logs.** Passwords, JWTs, the `Cookie` header and raw IP addresses are
+never written to a log line. Promising that IPs are never stored and then writing them
+to a log file would be a distinction without a difference. Where correlation across
+requests is needed, the first 8 characters of `ip_hash` are logged instead. See
+[03-architecture.md § Observability and logging](./03-architecture.md).
+
 ## Correctness properties
 
 Three invariants that must hold no matter what else fails. Everything else is
