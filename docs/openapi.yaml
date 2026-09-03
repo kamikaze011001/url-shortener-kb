@@ -1,0 +1,573 @@
+openapi: 3.1.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  THIS FILE IS THE CONTRACT.
+#
+#  Hand-written, and the source of truth. The backend implements it; the
+#  frontend generates its client from it. Where the springdoc-generated spec
+#  at /v3/api-docs disagrees with this file, THIS FILE IS RIGHT and the code
+#  is wrong. Change this file first, then the code.
+#
+#  See ./05-api-contract.md and ./adr/0007-handwritten-openapi-is-the-contract.md
+# ─────────────────────────────────────────────────────────────────────────────
+
+info:
+  title: URL Shortener API
+  version: 1.0.0
+  description: |
+    Management API for the URL Shortener, plus the public redirect endpoint.
+
+    Authentication is a JWT in an `httpOnly` cookie named `session`. There is no
+    `Authorization` header in this API and the frontend never reads the token.
+
+    Errors are RFC 9457 `application/problem+json`. Switch on the `code` field,
+    never on `title` or `detail`.
+
+servers:
+  - url: http://localhost:8081/api/v1
+    description: Local development (Caddy proxies /api to the backend)
+  - url: https://app.example.com/api/v1
+    description: Production management API
+
+tags:
+  - name: auth
+    description: Owner registration and sessions
+  - name: links
+    description: Creating and managing Links
+  - name: redirect
+    description: The public redirect endpoint. Served on the SHORT host only.
+
+paths:
+
+  # ── auth ───────────────────────────────────────────────────────────────────
+
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Register an Owner
+      description: |
+        Creates an Owner and immediately starts a session. Email comparison is
+        case-insensitive; the typed casing is preserved for display.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  maxLength: 254
+                password:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+                  description: Stored as a bcrypt hash. Never returned by any endpoint.
+      responses:
+        '201':
+          description: Owner created; session cookie set
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SessionCookie'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Owner' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '409':
+          description: Email already registered (`EMAIL_TAKEN`)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Start a session
+      description: |
+        Returns `401 UNAUTHENTICATED` for both a wrong password and an unknown
+        email. Distinguishing them would turn this endpoint into an account
+        enumeration oracle.
+
+        Rate limited to 5 attempts per minute per IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200':
+          description: Session started
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SessionCookie'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Owner' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: End the session
+      description: |
+        Clears the cookie in the browser. It does NOT invalidate the JWT
+        server-side — there is no revocation list. A copied token remains valid
+        until it expires. Documented compromise; see 02-nfr.md.
+      responses:
+        '204': { description: Cookie cleared }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: The current Owner
+      description: |
+        The only way for the frontend to answer "am I logged in?", since the
+        session cookie is httpOnly and unreadable from JavaScript.
+      responses:
+        '200':
+          description: Current Owner
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Owner' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  # ── links ──────────────────────────────────────────────────────────────────
+
+  /links:
+    get:
+      tags: [links]
+      summary: List own Links
+      description: Newest first. Soft-deleted Links are never returned.
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: search
+          in: query
+          description: Case-insensitive substring match on Short Code or Destination.
+          schema: { type: string, maxLength: 200 }
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [ACTIVE, DISABLED, EXPIRED]
+      responses:
+        '200':
+          description: A page of Links
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LinkPage' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+    post:
+      tags: [links]
+      summary: Create a Link
+      description: |
+        With no `alias`, a 7-character base62 Short Code is generated. With an
+        `alias`, that exact string is claimed or the request fails — it never
+        silently falls back to a generated code.
+
+        Rate limited: 10/minute per IP and 100/hour per Owner.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateLinkRequest' }
+      responses:
+        '201':
+          description: Link created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Link' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409':
+          description: |
+            `ALIAS_TAKEN` — the Alias is already in the Code Namespace.
+            `RESERVED_ALIAS` — the Alias is a Reserved Word.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            `INVALID_DESTINATION` — not an absolute http/https URL.
+            `DESTINATION_NOT_ALLOWED` — a Private Destination, or one of our own
+            hostnames.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '500':
+          description: |
+            `INTERNAL` — includes the case where three Short Code generation
+            attempts all collided. Should be effectively impossible at a 0.003%
+            fill ratio; if it ever happens the collision-retry metric will show it.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /links/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      tags: [links]
+      summary: One Link
+      responses:
+        '200':
+          description: The Link
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Link' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+    patch:
+      tags: [links]
+      summary: Update a Link
+      description: |
+        Only `destination`, `status` and `expiresAt` are mutable. The Short Code
+        can never change: renaming would release the old string back into the
+        Code Namespace for someone else to claim.
+
+        An absent field means "leave alone". An explicit `null` for `expiresAt`
+        means "clear the expiry".
+
+        A destination change is recorded in the destination history and evicts
+        the Link from the redirect cache.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateLinkRequest' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Link' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: '`INVALID_DESTINATION` or `DESTINATION_NOT_ALLOWED`'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+    delete:
+      tags: [links]
+      summary: Delete a Link
+      description: |
+        Soft delete. The Link stops redirecting and leaves the Owner's list, but
+        the row is retained and **the Short Code is never released**. Reusing a
+        code would silently repoint a link that someone has already shared.
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /links/{id}/stats:
+    get:
+      tags: [links]
+      summary: Click statistics for a Link
+      description: |
+        Counts are approximate by design — analytics, not an audit log.
+        Visible only to the Owner.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: from
+          in: query
+          description: Inclusive. Defaults to 30 days ago.
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          description: Inclusive. Defaults to today.
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Statistics
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LinkStats' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── redirect ───────────────────────────────────────────────────────────────
+
+  /{code}:
+    get:
+      tags: [redirect]
+      summary: Follow a Short Link
+      description: |
+        **Served on the SHORT host (`https://s.example.com/{code}`), not under
+        `/api`.** It appears in this spec for completeness; the entire root
+        namespace of the short host belongs to Short Codes.
+
+        Answers `302`, never `301`: a permanent redirect is cached by the browser
+        forever, which would make Click counts meaningless and make a Destination
+        change invisible to anyone who had already followed the link.
+
+        Unknown, Disabled, Expired and Deleted all return an **identical** `404`.
+        A Visitor cannot tell which of the four applies.
+      security: []
+      servers:
+        - url: http://localhost:8080
+          description: Local short host
+        - url: https://s.example.com
+          description: Production short host
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[A-Za-z0-9_-]{3,32}$' }
+      responses:
+        '302':
+          description: Redirect to the Destination
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+            Cache-Control:
+              schema: { type: string, const: 'private, no-cache' }
+            X-Robots-Tag:
+              schema: { type: string, const: 'noindex' }
+        '404':
+          description: |
+            Unknown, Disabled, Expired or Deleted — indistinguishable by design.
+          content:
+            text/html:
+              schema: { type: string }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+components:
+
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
+      description: |
+        JWT, 1 hour lifetime. `HttpOnly; SameSite=Strict`, plus `Secure` in
+        production. Not readable from JavaScript, and not revocable before it
+        expires.
+
+  headers:
+    SessionCookie:
+      description: Sets the session cookie
+      schema:
+        type: string
+        examples:
+          - 'session=eyJhbGci...; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600'
+
+  responses:
+    Unauthenticated:
+      description: '`UNAUTHENTICATED` — no valid session'
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+    NotFound:
+      description: |
+        `NOT_FOUND` — the resource does not exist, **or belongs to another Owner**.
+        Deliberately indistinguishable: a `403` would confirm it exists.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+    ValidationFailed:
+      description: '`VALIDATION_FAILED` — see the `errors` array for the fields'
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+    RateLimited:
+      description: '`RATE_LIMITED`'
+      headers:
+        Retry-After:
+          description: Seconds until the next attempt is permitted
+          schema: { type: integer }
+        X-RateLimit-Limit:
+          schema: { type: integer }
+        X-RateLimit-Remaining:
+          schema: { type: integer }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+
+    Problem:
+      type: object
+      description: RFC 9457. Switch on `code`; `title` and `detail` may be reworded.
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        code:
+          type: string
+          description: Machine-readable and part of the contract.
+          enum:
+            - VALIDATION_FAILED
+            - UNAUTHENTICATED
+            - NOT_FOUND
+            - ALIAS_TAKEN
+            - RESERVED_ALIAS
+            - EMAIL_TAKEN
+            - INVALID_DESTINATION
+            - DESTINATION_NOT_ALLOWED
+            - RATE_LIMITED
+            - INTERNAL
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              message: { type: string }
+
+    Owner:
+      type: object
+      required: [id, email, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        createdAt: { type: string, format: date-time }
+
+    Link:
+      type: object
+      required:
+        [id, code, shortUrl, destination, status, isCustomAlias, clickCount, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        code:
+          type: string
+          description: Case-sensitive. Immutable for the life of the Link.
+        shortUrl:
+          type: string
+          format: uri
+          description: |
+            Fully formed by the server from configuration. The frontend must
+            never build this by concatenating a base URL with `code`.
+        destination: { type: string, format: uri }
+        status:
+          type: string
+          enum: [ACTIVE, DISABLED, EXPIRED]
+          description: |
+            `EXPIRED` is derived from `expiresAt`, not stored. Only `ACTIVE` and
+            `DISABLED` exist in the database.
+        isCustomAlias: { type: boolean }
+        clickCount: { type: integer, format: int64 }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CreateLinkRequest:
+      type: object
+      required: [destination]
+      properties:
+        destination:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: Absolute http/https only. Must not be a Private Destination.
+        alias:
+          type: [string, 'null']
+          minLength: 3
+          maxLength: 32
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: |
+            Case-sensitive, globally unique across the whole Code Namespace —
+            not scoped per Owner. Omit to have one generated.
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+          description: Must be in the future.
+
+    UpdateLinkRequest:
+      type: object
+      description: |
+        Absent field = leave alone. Explicit `null` for `expiresAt` = clear it.
+      properties:
+        destination: { type: string, format: uri, maxLength: 2048 }
+        status: { type: string, enum: [ACTIVE, DISABLED] }
+        expiresAt: { type: [string, 'null'], format: date-time }
+
+    LinkPage:
+      type: object
+      required: [content, page, size, totalElements, totalPages]
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/Link' }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer, format: int64 }
+        totalPages: { type: integer }
+
+    LinkStats:
+      type: object
+      required: [linkId, totalClicks, from, to, daily]
+      properties:
+        linkId: { type: string }
+        totalClicks: { type: integer, format: int64 }
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        daily:
+          type: array
+          items:
+            type: object
+            required: [date, clicks]
+            properties:
+              date: { type: string, format: date }
+              clicks: { type: integer, format: int64 }
+        byCountry:
+          type: array
+          description: '`XX` means unknown — normal outside production.'
+          items:
+            type: object
+            properties:
+              countryCode: { type: string, minLength: 2, maxLength: 2 }
+              clicks: { type: integer, format: int64 }
+        byReferrer:
+          type: array
+          items:
+            type: object
+            properties:
+              referrer: { type: string, description: '`null` host means direct.' }
+              clicks: { type: integer, format: int64 }
+        byDevice:
+          type: array
+          items:
+            type: object
+            properties:
+              deviceType:
+                type: string
+                enum: [DESKTOP, MOBILE, TABLET, BOT, UNKNOWN]
+              clicks: { type: integer, format: int64 }
+
+security:
+  - sessionCookie: []
