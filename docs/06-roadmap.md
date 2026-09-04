@@ -24,13 +24,26 @@ Triggered by anyone other than the author depending on the service.
 
 ### R-1 — Session revocation and refresh tokens
 
-**Trigger:** a real Owner other than the author, or the first "log me out
-everywhere" request.
+**Status: half delivered.** The trigger fired early, and not from where this entry
+expected — password reset (FR-1.9) made revocation necessary, because resetting a
+compromised password while the attacker's session stayed alive would have made the
+feature half theatre.
 
-Today a session cannot be revoked before its 1-hour expiry, and expiry is abrupt.
-The fix is a `token_version` column on `owners`, checked per request — which costs one
-query per request, and *that* is why it isn't in the demo. Refresh tokens with
-rotation and reuse detection follow, and are more work than they appear.
+`token_version` now exists and is checked on every authenticated request. The cost that
+kept it out of the demo turned out not to apply: **the redirect path is
+unauthenticated**, so the check never touches the one path with a 20 ms budget — it
+runs only on the management API, where the budget is ten times looser. See
+[ADR-0018](./adr/0018-session-revocation-by-token-version.md).
+
+**What remains:**
+
+- **Per-device revocation.** Today revocation is all-or-nothing per Owner. Naming one
+  device needs a session table, which is the same work as refresh tokens.
+- **Refresh tokens with rotation and reuse detection**, so expiry stops being abrupt.
+  Still more work than it appears, and still not triggered.
+
+**Trigger for the remainder:** the first "log me out of that one laptop" request, or
+an Owner complaining about being signed out mid-task.
 
 ### R-2 — External Destination screening
 
@@ -129,6 +142,34 @@ which is exactly the asymmetry that makes sampling safe.
 ## Stage 3 — Changes that are decisions, not scaling
 
 Not triggered by load. Triggered by wanting a different product.
+
+### R-12 — Scoped API Keys
+
+**Trigger:** the first Owner who wants to hand a key to something they do not fully
+trust — a third-party integration, or a script someone else runs.
+
+Today a key carries its Owner's full authority except managing keys
+([ADR-0019](./adr/0019-api-key-authentication.md)). Scopes — read-only, create-only,
+per-Link — were deliberately not built, because scopes invented before a use case are
+the speculative generality this page argues against everywhere else.
+
+The shape is a `scopes` column and a check at the edge. The hard part is not the code,
+it is deciding the vocabulary of scopes without a real request to shape it.
+
+### R-13 — Deliverability and email as a dependency
+
+**Trigger:** the first Owner who reports never receiving a code.
+
+Email is now on the critical path for registration and recovery, and it is the least
+reliable component in the system — a code that lands in spam is indistinguishable, from
+the Owner's side, from one never sent. What is missing: bounce and complaint handling,
+a visible send log the Owner can check, and SPF/DKIM on a real domain rather than a
+provider's shared sending domain.
+
+The deeper question this raises: **should an unverified Owner be blocked at all if the
+blocking mechanism can fail silently?** [ADR-0016](./adr/0016-verification-gates-creation.md)
+answers yes today, on the grounds that every recovery path stays reachable. If
+deliverability turns out to be bad, that answer is the one to revisit first.
 
 ### R-8 — Key Generation Service
 

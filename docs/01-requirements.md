@@ -18,16 +18,31 @@ whole life; ownership is never transferred.
 
 ### FR-1 — Authentication
 
-- **FR-1.1** An Owner registers with email + password.
+- **FR-1.1** An Owner registers with email + password. Registration sends a
+  verification code to that address.
 - **FR-1.2** An Owner logs in and receives a session valid for 1 hour.
 - **FR-1.3** An Owner logs out, ending the session immediately in the browser.
 - **FR-1.4** Every `/api/v1/links/**` endpoint requires an authenticated Owner.
 - **FR-1.5** Passwords are stored as bcrypt hashes, never recoverable.
+- **FR-1.6** An Owner verifies their email address with a 6-digit code.
+- **FR-1.7** An **unverified** Owner may sign in and read their account, but may not
+  create Links. See [ADR-0016](./adr/0016-verification-gates-creation.md).
+- **FR-1.8** An Owner may request a replacement verification code, throttled per FR-6.
+- **FR-1.9** An Owner who has forgotten their password requests a reset code by email,
+  then sets a new password with it.
+- **FR-1.10** Setting a new password **invalidates every existing session** for that
+  Owner. See [ADR-0018](./adr/0018-session-revocation-by-token-version.md).
+- **FR-1.11** Every code is 6 digits, valid for 10 minutes, single-use, dies after 5
+  wrong attempts, and is **stored hashed**.
+  See [ADR-0017](./adr/0017-otp-codes-in-postgres.md).
+- **FR-1.12** A request for a password reset answers identically whether or not the
+  address is registered.
 
-> **Demo compromise.** No email verification, no password reset, no OAuth, no refresh
-> token, no server-side session revocation. A session cannot be invalidated before it
-> expires. See [02-nfr.md](./02-nfr.md#security) for why this is acceptable here and
-> what it would take to fix.
+> **This pays off part of the original demo compromise.** Email verification, password
+> reset and server-side session revocation now exist. Still deliberately absent: OAuth,
+> refresh tokens, and per-device revocation — logging out invalidates *every* session
+> for an Owner, not one chosen device. That is enough for FR-1.10 and short of what a
+> real product eventually wants.
 
 ### FR-2 — Creating Links
 
@@ -74,6 +89,13 @@ whole life; ownership is never transferred.
   the old string for someone else to claim, which is the same hazard as FR-4.6.
 - **FR-4.8** An Owner can only ever see or act on their own Links. A request for
   another Owner's Link answers `404`, not `403` — `403` would confirm it exists.
+- **FR-4.9** An Owner **reads the Destination history** of their own Link: every
+  previous Destination, with who changed it and when.
+
+> FR-4.9 exists because FR-4.3 was only half a feature. ADR-0009 defends mutable
+> Destinations on the grounds that *"every switch is recorded, with who and when"* —
+> but until now nothing could read that record, so the defence described a property the
+> product did not expose. Writing an audit trail nobody can read is theatre.
 
 ### FR-5 — Statistics
 
@@ -97,14 +119,57 @@ whole life; ownership is never transferred.
 - **FR-6.6** The client IP is resolved from `CF-Connecting-IP` **only when the request
   arrives from the trusted tunnel**, otherwise from the socket. A spoofable header
   would make every limit above decorative.
+- **FR-6.7** Per-IP rate limit on password-reset requests: 3 / hour — **and** 3 / hour
+  per target email address.
+- **FR-6.8** Per-Owner rate limit on requesting a code: 1 / minute and 5 / hour.
+- **FR-6.9** Per-Owner rate limit on submitting a code: 10 / hour, on top of the
+  5-attempt limit carried by each individual code.
+- **FR-6.10** Requests authenticated by an API Key are limited **per key**, at
+  60 Link creations / minute.
+
+> **FR-6.7 has two buckets on purpose.** Limiting password-reset requests per IP alone
+> lets an attacker rotate addresses and flood a victim's inbox — and that victim never
+> used this service. The second bucket, keyed on the target address, caps what any
+> number of attackers can do to one person.
+>
+> **FR-6.10 is keyed per key, not per IP,** because automation runs from shared cloud
+> addresses. Per-IP would let one noisy tenant exhaust the limit for everyone else in
+> the same datacenter.
 
 ### FR-7 — Operability
 
 - **FR-7.1** `/actuator/health` reports liveness including database reachability.
 - **FR-7.2** `/actuator/prometheus` exposes: redirect latency histogram, redirect
   outcome counter (hit / miss / expired / disabled), cache hit ratio, Short Code
-  collision-retry counter, rate-limit rejection counter.
+  collision-retry counter, rate-limit rejection counter, email send outcome counter.
 - **FR-7.3** Logs are structured JSON, one line per request, carrying a request id.
+
+### FR-8 — API Keys
+
+- **FR-8.1** An Owner creates a named API Key and uses it to call the management API
+  without a browser.
+- **FR-8.2** The key's plaintext is shown **exactly once**, at creation. It is stored
+  only as a SHA-256 hash. See [ADR-0019](./adr/0019-api-key-authentication.md).
+- **FR-8.3** The key list shows a prefix and the last four characters, so keys can be
+  told apart without being recoverable.
+- **FR-8.4** An Owner revokes a key. Revocation takes effect on the next request.
+- **FR-8.5** A key carries the full authority of its Owner **except** managing API
+  Keys. A leaked key cannot mint more keys, and cannot lock its Owner out.
+- **FR-8.6** A key is presented as `Authorization: Bearer <key>`. When a request
+  carries both a key and a session cookie, the key wins and the cookie is ignored.
+- **FR-8.7** A key never expires. It ends when it is revoked.
+- **FR-8.8** An Owner whose email is unverified cannot create Links with a key either.
+  FR-1.7 is a property of the Owner, not of the credential.
+
+> **Why this exists at all.** The session is an `httpOnly` cookie
+> ([ADR-0014](./adr/0014-session-in-httponly-cookie.md)), which is exactly what stops a
+> script from reading it. That is the right choice for browsers and it leaves nothing
+> for an automation tool, a CI job or an AI agent to authenticate with. FR-8 is the
+> second door, opened deliberately rather than by weakening the first.
+>
+> **FR-8.7 is a real trade-off.** Expiring keys are better security hygiene and worse
+> operations: a key that dies on a schedule breaks an unattended integration at an hour
+> nobody is awake. Revocation-only puts the decision in a human's hands.
 
 ## Explicit non-goals
 
@@ -115,8 +180,9 @@ Named so nobody has to wonder whether they were forgotten. Each is a decision.
 | Click-limit expiry (`max_clicks`) | Enforcing it on the redirect path requires reading a live counter on every request, which defeats the destination cache. Time-based expiry has no such cost. Deferred to [06-roadmap.md](./06-roadmap.md). |
 | Password-protected Links | No new architectural lesson; pure UI work |
 | Bulk import / CSV | Same |
-| QR codes | Genuinely nice, genuinely cuttable — a client-side library and 20 lines. Build only if the demo script is already green. |
-| Teams, sharing, ownership transfer | Multiplies the authorization model for no demo value |
+| Teams, sharing, ownership transfer | Multiplies the authorization model for no demo value. FR-4.9 records `changed_by` against a single Owner today; it only becomes interesting when more than one person can change a Link. |
+| Per-device session revocation | FR-1.10 invalidates every session for an Owner at once. Naming individual devices needs a session table, which is the same work as refresh tokens — see R-1. |
+| Decorated QR codes (logo, rounded dots) | They scan measurably worse. A code that fails on a poor camera in a lecture hall is worse than a plain one. |
 | Custom domains per Owner | Real product feature, week of work, changes the routing model completely |
 | Link preview / interstitial page | Contradicts the point of a redirect |
 | External malicious-URL screening | [ADR-0010](./adr/0010-defer-external-url-screening.md) — deferred deliberately, interface defined |
@@ -128,14 +194,30 @@ Named so nobody has to wonder whether they were forgotten. Each is a decision.
 This is the acceptance test. **Anything that does not appear here is a candidate to
 cut**; anything here must work.
 
-1. Open the dashboard → register → log in
-2. Paste a long URL → receive a Short Link → **click it, it redirects**
-3. Create a Link with the Alias `demo` → follow it
-4. Try to claim `demo` again → clean `409` surfaced in the UI
-5. Try to shorten `http://192.168.1.1/admin` → refused, `DESTINATION_NOT_ALLOWED`
-6. Click *create* repeatedly → `429`, with the UI showing the retry delay
-7. Dashboard shows the Click counts from steps 2–3
-8. Edit a Destination → follow the same Short Link → arrives somewhere new
-9. Show `/actuator/prometheus`, then open this repo and walk one ADR
+1. Open the dashboard → register
+2. **Try to create a Link before verifying → refused, `EMAIL_NOT_VERIFIED`**
+3. **Read the code from the inbox → enter it → the same action now works**
+4. Paste a long URL → receive a Short Link → **click it, it redirects**
+5. Create a Link with the Alias `demo` → follow it → **show its QR code**
+6. Try to claim `demo` again → clean `409` surfaced in the UI
+7. Try to shorten `http://192.168.1.1/admin` → refused, `DESTINATION_NOT_ALLOWED`
+8. Click *create* repeatedly → `429`, with the UI showing the retry delay counting down
+9. Dashboard shows the Click counts from steps 4–5
+10. Edit a Destination → follow the same Short Link → arrives somewhere new →
+    **open the Destination History and show the change recorded**
+11. Show `/actuator/prometheus`, then open this repo and walk one ADR
 
-Steps 5, 6 and 9 are the ones that distinguish this from a tutorial project.
+**Steps 2, 7, 8 and 10 are the ones that distinguish this from a tutorial project.**
+Each shows a decision refusing to do something convenient: an unverified account is
+stopped, a private address is refused, a burst is throttled with an honest delay, and a
+mutable Destination is made accountable rather than merely allowed.
+
+**Droppable if the demo runs long:** step 5's QR code, and step 10's history if the
+edit itself has already landed. **Not droppable:** steps 2–3, because the whole point of
+adding verification was that it gates something.
+
+Two flows are deliberately *not* in the script, and are worth having ready if asked
+rather than performed: **password reset** (it invalidates the session and forces a
+re-login mid-demo, which costs a minute and shows little) and **API Keys** (they exist
+only in a terminal — see [ADR-0019](./adr/0019-api-key-authentication.md), which says
+so plainly).

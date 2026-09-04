@@ -48,6 +48,10 @@ Every entry below was a genuine trade-off with a rejected alternative.
 | [0013](./docs/adr/0013-fixed-window-rate-limiting.md) | A fixed-window counter in Redis, not a token bucket |
 | [0014](./docs/adr/0014-session-in-httponly-cookie.md) | Session in an httpOnly cookie; the frontend asks the server who it is |
 | [0015](./docs/adr/0015-utc-days-for-statistics.md) | Statistics are grouped by UTC day |
+| [0016](./docs/adr/0016-verification-gates-creation.md) | An unverified Owner may sign in, but may not create Links |
+| [0017](./docs/adr/0017-otp-codes-in-postgres.md) | One-time codes live in Postgres, hashed — not in Redis |
+| [0018](./docs/adr/0018-session-revocation-by-token-version.md) | Sessions are revoked by a token version, cached in Redis |
+| [0019](./docs/adr/0019-api-key-authentication.md) | API Keys are the second door, opened deliberately |
 
 ## Project constraints
 
