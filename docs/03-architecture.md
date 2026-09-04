@@ -19,12 +19,15 @@ what a class talks to. Every class has exactly one of each, so its path says wha
 com.<org>.urlshortener
 ├── shared/                    open module — every module may use all of it
 │   ├── config/                AppProperties, SecurityConfig, clock
-│   ├── error/                 ApiException, ProblemCode, the RFC 9457 handler
-│   └── http/                  client IP and country resolution
+│   ├── error/                 ApiException, ProblemCode, RFC 9457 handler + writer
+│   ├── http/                  client IP and country resolution
+│   ├── ratelimit/             FR-6, in Redis — ADR-0013
+│   └── security/              JwtCodec, the cookie auth filter, CurrentOwner
 ├── identity/                  Owners, registration, login, session
 ├── links/                     create, edit, disable, delete. Owns the Link.
 │   ├── port/                  ← the ONLY thing other modules may touch
-│   │   └── LinkLookup
+│   │   ├── LinkLookup         resolve a Short Code (redirect)
+│   │   └── LinkOwnership      may this Owner see this Link? (analytics)
 │   ├── usecase/               CreateLinkUseCase, UpdateLinkUseCase, ...
 │   ├── domain/                ShortCodeGenerator, DestinationScreener
 │   ├── store/                 database edge
@@ -33,8 +36,16 @@ com.<org>.urlshortener
 └── analytics/                 recording Clicks, reading statistics
     ├── port/ClickRecorder     ← the seam from ADR-0005
     ├── usecase/GetLinkStatsUseCase
-    └── store/
+    ├── domain/ReferrerHost
+    ├── store/                 click_events, owned here
+    └── web/                   GET /links/{id}/stats
 ```
+
+**`/links/{id}/stats` is served from `analytics`, not `links`.** The URL names the
+resource an Owner asks about; the package names the module that owns the data. Moving
+the endpoint into `links` to make the two match would put `click_events` queries in a
+module that does not own that table — the coupling the boundary exists to prevent, and
+one Modulith cannot catch, because it verifies code dependencies and not data ones.
 
 | Role package | Talks to | Holds |
 |---|---|---|
@@ -242,14 +253,15 @@ checks; see [ADR-0010](./adr/0010-defer-external-url-screening.md).
 | **Spring Modulith (`-core`, `-test`)** | Module boundaries fail the build instead of rotting in a document — [ADR-0012](./adr/0012-modulith-verified-boundaries.md). Event registry deliberately excluded. |
 | **One class per use case** | Not a service layer — [ADR-0011](./adr/0011-one-class-per-use-case.md) |
 | **Micrometer Tracing (otel bridge), no exporter** | Standard, propagating `traceId` in MDC for the same effort as a hand-rolled request id |
-| **logstash-logback-encoder** | Logs queried by field, not by regex |
+| **Boot 4 native structured logging** (`logging.structured.format.console=ecs`) | Logs queried by field, not by regex. No logstash encoder: Boot 4 emits ECS JSON itself. |
 | **Postgres 16** | Single source of truth. Nothing here needs a document store or a wide-column store, and a unique constraint is the cheapest collision detector available. |
 | **JPA for management, JdbcTemplate for redirect** | The redirect is one indexed row read. An entity manager, dirty checking and a persistence context are pure overhead on the one path with a latency budget. |
 | **Flyway** | Migrations are versioned artefacts, applied identically on a laptop and in production. |
 | **Redis 7** | Destination cache and distributed rate limiting only — [ADR-0004](./adr/0004-redis-is-cache-not-truth.md) |
-| **Bucket4j** | Token bucket, Redis-backed, so limits survive a restart and would work across replicas. |
+| **A fixed-window counter in Redis** | Not Bucket4j. Eleven lines of Lua against a Redis that already exists, with the burst it permits stated rather than hidden — [ADR-0013](./adr/0013-fixed-window-rate-limiting.md) |
 | **Caddy** | Static file serving plus an `/api` reverse proxy in ~8 lines, no TLS config needed since Cloudflare terminates. |
-| **Vite + React + TS + Tailwind + shadcn/ui** | Static bundle; SSR would buy nothing here and would add a Node container. shadcn gives a credible dashboard in the ~3 hours the frontend gets. |
+| **Vite + React + TS + Tailwind v4** | Static bundle; SSR would buy nothing here and would add a Node container. Tailwind v4 is CSS-first, so the design tokens live in one `@theme` block and there is no config file. |
+| **A hand-built design system, not shadcn** | shadcn was the plan and was dropped. Its visual defaults — rounded corners, soft shadows, the same neutral palette everywhere — are exactly the generic look the frontend's `DESIGN.md` exists to avoid, so every component would have been rewritten anyway. |
 | **TanStack Query** | Server state has caching, retry and invalidation requirements that `useState` does not. |
 
 ## Observability and logging
@@ -274,9 +286,11 @@ we?" once deployed.
 
 ### Structured JSON, with domain fields in MDC
 
-`logstash-logback-encoder`. A filter puts `ownerId` and, where known, `linkId` and
-`code` into MDC, so every line inside a request carries them without being passed
-around. Logs are queried by field, never by regular expression.
+Spring Boot 4 emits structured JSON natively — `logging.structured.format.console=ecs`
+— so there is no `logstash-logback-encoder` and no encoder configuration to maintain.
+A filter puts `ownerId` and, where known, `linkId` and `code` into MDC, so every line
+inside a request carries them without being passed around. Logs are queried by field,
+never by regular expression.
 
 ### One deliberate business event per meaningful outcome
 

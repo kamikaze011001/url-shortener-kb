@@ -17,8 +17,9 @@ written.
 
 **WebFlux + R2DBC.** Better numbers in benchmarks, and the reflex answer for a
 "high-throughput redirect service". Rejected because the cost lands entirely on the
-parts of this project that are scarcest: every repository becomes reactive, Bucket4j's
-JDBC integration is unavailable, stack traces stop being readable, and blocking
+parts of this project that are scarcest: every repository becomes reactive, every
+blocking library has to be replaced or wrapped, stack traces stop being readable, and
+blocking
 accidentally anywhere in the chain silently destroys the benefit. For a solo build with
 a ~14-hour budget, that is a large risk against a bottleneck we do not have.
 
@@ -29,8 +30,8 @@ take it would be perverse.
 
 ## Consequences
 
-- Repository code stays imperative and blocking. JDBC, JPA and Bucket4j all work
-  normally. This is the point, not a compromise.
+- Repository code stays imperative and blocking. JDBC, JPA and the Redis client all
+  work normally. This is the point, not a compromise.
 - `synchronized` blocks around I/O would pin a virtual thread to its carrier and undo
   the benefit. Any lock on a request path must be a `ReentrantLock`. This is the one
   new rule the decision introduces, and the one way to get it wrong.

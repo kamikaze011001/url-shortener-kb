@@ -6,8 +6,8 @@ date: 2026-09-03
 # Redis is a cache and a rate limiter, never a source of truth
 
 Redis holds exactly two things: the destination cache
-(`code → {linkId, destination, status, expiresAt}`, 1 hour TTL) and Bucket4j's rate
-limit buckets. **Postgres is the only source of truth.** Losing Redis entirely costs a
+(`code → {linkId, destination, status, expiresAt}`, 1 hour TTL) and the rate-limit
+counters ([ADR-0013](./0013-fixed-window-rate-limiting.md)). **Postgres is the only source of truth.** Losing Redis entirely costs a
 cold cache and temporarily unenforced rate limits; it never costs data and never
 returns a wrong answer.
 
