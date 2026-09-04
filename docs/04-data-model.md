@@ -6,30 +6,50 @@ Postgres 16. Migrations are Flyway, in `url-shortener-backend/src/main/resources
 ## Diagram
 
 ```
-┌──────────────┐         ┌────────────────────────────┐
-│   owners     │────1:N──│           links            │
-└──────────────┘         └────────────┬───────────────┘
-                                      │
-                          ┌───────────┴───────────┐
-                          │ 1:N                   │ 1:N
-              ┌───────────▼──────────┐  ┌─────────▼────────────────┐
-              │ link_destination_    │  │      click_events        │
-              │      history         │  │                          │
-              └──────────────────────┘  └──────────────────────────┘
+                  ┌──────────────┐
+      ┌───1:N─────│   owners     │─────1:N───┐
+      │           └──────┬───────┘           │
+      │                  │ 1:N               │
+┌─────▼──────┐    ┌──────▼───────────────┐  ┌▼───────────┐
+│ otp_codes  │    │        links         │  │  api_keys  │
+└────────────┘    └──────────┬───────────┘  └────────────┘
+                             │
+                 ┌───────────┴───────────┐
+                 │ 1:N                   │ 1:N
+     ┌───────────▼──────────┐  ┌─────────▼────────────────┐
+     │ link_destination_    │  │      click_events        │
+     │      history         │  │                          │
+     └──────────────────────┘  └──────────────────────────┘
 ```
 
 ## `owners`
 
 ```sql
 CREATE TABLE owners (
-    id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-    email         text        NOT NULL,
-    password_hash text        NOT NULL,
-    created_at    timestamptz NOT NULL DEFAULT now()
+    id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    email          text        NOT NULL,
+    password_hash  text        NOT NULL,
+    email_verified boolean     NOT NULL DEFAULT false,
+    token_version  integer     NOT NULL DEFAULT 0,
+    created_at     timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE UNIQUE INDEX owners_email_lower_key ON owners (lower(email));
 ```
+
+**`token_version` is how a session dies before it expires.** Every JWT carries the
+version that was current when it was issued; every authenticated request compares the
+claim against this column. A password reset increments it, and every token issued
+before that moment stops matching (FR-1.10,
+[ADR-0018](./adr/0018-session-revocation-by-token-version.md)).
+
+It is an `integer` and it only ever goes up. Nothing reads its absolute value, so
+wraparound is not a correctness concern before it is an archaeological one.
+
+**`email_verified` is backfilled to `true` for rows that already exist.** Accounts
+created before verification existed were never verified under the old rules either, and
+retroactively locking them out buys no security while breaking working accounts. New
+registrations start `false`.
 
 **Email uniqueness is case-insensitive** via a functional index, while the original
 casing is preserved for display. `Sonanh@Example.com` and `sonanh@example.com` are the
@@ -170,6 +190,85 @@ append-only and safe to prune, which is the whole reason statistics are defined 
 approximate. The rollup that makes pruning possible is
 [R-3 in the roadmap](./06-roadmap.md); it is deliberately not built yet, because at
 demo scale `GROUP BY` over a few thousand rows is instant.
+
+## `otp_codes`
+
+One row per outstanding code, for both verification and password reset.
+
+```sql
+CREATE TABLE otp_codes (
+    id          bigserial   PRIMARY KEY,
+    owner_id    uuid        NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
+    purpose     varchar(24) NOT NULL,
+    code_hash   char(64)    NOT NULL,
+    attempts    smallint    NOT NULL DEFAULT 0,
+    expires_at  timestamptz NOT NULL,
+    consumed_at timestamptz NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT otp_purpose_check
+        CHECK (purpose IN ('EMAIL_VERIFICATION', 'PASSWORD_RESET'))
+);
+
+-- The lookup: the newest live code for this Owner and purpose.
+CREATE INDEX otp_codes_owner_purpose_idx
+    ON otp_codes (owner_id, purpose, created_at DESC)
+    WHERE consumed_at IS NULL;
+```
+
+**Postgres, not Redis, and that follows from a rule already written down.**
+[ADR-0004](./adr/0004-redis-is-cache-not-truth.md) says Redis holds a cache and rate
+limits and is *never a source of truth*. A code that authorises a password change **is**
+a source of truth — losing it must not silently grant or deny access, and a Redis
+restart must not invalidate every outstanding reset in flight. See
+[ADR-0017](./adr/0017-otp-codes-in-postgres.md).
+
+**`code_hash`, never the code.** Same argument as FR-1.5 for passwords: a database leak
+must not hand over a set of live reset codes. SHA-256 rather than bcrypt is defensible
+here only because the code is machine-generated — see the same ADR for why that
+reasoning does *not* transfer to passwords.
+
+**`attempts` is on the row, not in Redis,** so the 5-attempt limit survives a cache
+restart. A brute-force limit that resets when a container does is not a limit.
+
+`consumed_at` rather than deleting the row: a consumed code is evidence, and the window
+where the same code is submitted twice is exactly the window worth being able to see.
+
+## `api_keys`
+
+```sql
+CREATE TABLE api_keys (
+    id           bigserial   PRIMARY KEY,
+    owner_id     uuid        NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
+    name         varchar(64) NOT NULL,
+    key_hash     char(64)    NOT NULL,
+    key_prefix   varchar(16) NOT NULL,
+    key_last4    char(4)     NOT NULL,
+    last_used_at timestamptz NULL,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    revoked_at   timestamptz NULL
+);
+
+-- The authentication lookup, on every keyed request.
+CREATE UNIQUE INDEX api_keys_hash_key ON api_keys (key_hash);
+
+CREATE INDEX api_keys_owner_idx
+    ON api_keys (owner_id, created_at DESC)
+    WHERE revoked_at IS NULL;
+```
+
+**The hash is the lookup key, so authentication is one indexed read** — hash what
+arrived, find the row, or answer 401. There is no scan and no per-row comparison, which
+is the reason SHA-256 rather than bcrypt: a per-row bcrypt comparison cannot use an
+index at all. [ADR-0019](./adr/0019-api-key-authentication.md) explains why that is
+safe for a 256-bit random key and would not be for a password.
+
+**`key_prefix` and `key_last4` exist because the plaintext is gone.** An Owner with
+three keys has to be able to tell which one to revoke, and `sk_live_8f2a…c3d4` is
+enough to recognise a key without being enough to use one.
+
+`last_used_at` answers the only question that matters before revoking something: *is
+anything still using this?*
 
 ## Reserved words
 

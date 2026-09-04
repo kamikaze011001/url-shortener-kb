@@ -28,6 +28,11 @@ _Avoid_: custom slug, vanity URL, custom code
 The URL a visitor is sent to when they follow a Link.
 _Avoid_: target, long URL, original URL, source
 
+**Destination History**:
+The append-only record of every Destination a Link has had, with who changed it and
+when. It is what makes a changeable Destination accountable rather than a loophole.
+_Avoid_: audit log, changelog, revisions
+
 **Short Link**:
 The full public URL a person shares — the Short Domain plus the Short Code.
 Distinct from the Link, which is the record; the Short Link is the string.
@@ -86,6 +91,32 @@ _Avoid_: forward, resolve, lookup
 One recorded Redirect. Clicks are counted approximately and deliberately: they are
 analytics, not an audit log and not billing data.
 _Avoid_: hit, visit, view, impression
+
+### Credentials
+
+**One-Time Code**:
+A six-digit number sent to an email address, proving control of it exactly once. Two
+purposes only: confirming a new Owner's address, and authorising a password reset.
+Abbreviated **OTP** in code and table names; the full term is what this document and
+the interface use.
+_Avoid_: PIN, token, magic code, verification link
+
+**Verified Owner**:
+An Owner who has proved control of the email address they registered with. An Owner
+who has not is not a lesser account — they can sign in, read, and recover — they
+simply cannot create Links.
+_Avoid_: activated, confirmed, approved
+
+**API Key**:
+A credential belonging to an Owner that a program presents instead of signing in. It
+exists because the session deliberately cannot be read by anything but a browser, so
+automation has nothing else to hold.
+_Avoid_: token, secret, access token, password
+
+**Session**:
+The proof, held in a browser cookie, that an Owner signed in. Ends when it expires,
+when the Owner signs out, or when their password changes.
+_Avoid_: login, auth token, JWT
 
 ### Safety
 

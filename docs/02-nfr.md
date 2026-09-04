@@ -90,14 +90,28 @@ place instead:
 | No namespace enumeration | Uniform `404`; another Owner's Link is `404`, not `403` |
 | No IP spoofing past the rate limiter | `CF-Connecting-IP` trusted **only** from the tunnel's address |
 | No credential stuffing | 5 login attempts / minute / IP |
+| A stolen session dies when the password changes | `token_version` on the Owner, compared per authenticated request — [ADR-0018](./adr/0018-session-revocation-by-token-version.md) |
+| A leaked reset code is not reusable | Single-use, 10-minute life, 5 attempts, stored hashed — [ADR-0017](./adr/0017-otp-codes-in-postgres.md) |
+| Password reset does not reveal who is registered | Identical `202` either way (FR-1.12) |
+| An attacker cannot mailbomb a stranger | Reset requests limited per IP **and** per target address (FR-6.7) |
+| A leaked API Key cannot escalate | A key may not manage API Keys, so it cannot mint more or lock the Owner out (FR-8.5) |
 
 **Known, accepted weaknesses.** Each is a demo compromise with a named fix:
 
-- **A session cannot be revoked before its 1-hour expiry.** Fix: a token-version
-  column on the Owner, checked per request — one query per request, which is why it
-  isn't free.
+- ~~**A session cannot be revoked before its 1-hour expiry.**~~ **Fixed.** The
+  token-version column exists and is checked per authenticated request. The cost that
+  made it look expensive turned out not to apply: the redirect path is unauthenticated,
+  so the check never runs on the one path with a 20 ms budget. See
+  [ADR-0018](./adr/0018-session-revocation-by-token-version.md).
+- **Revocation is all-or-nothing per Owner.** "Log out everywhere" works; "log out of
+  that one device" does not, because nothing distinguishes one token from another.
 - **No refresh token**, so an Owner is logged out abruptly after an hour. Fix: a
   refresh token with rotation and reuse detection. Materially more code than it looks.
+- **An API Key never expires.** Deliberate — a key that dies on a schedule breaks an
+  unattended integration at an hour nobody is awake — but it does mean a key leaked and
+  never noticed is valid forever. `lastUsedAt` is what makes that noticeable.
+- **Email delivery is not guaranteed.** A code that lands in a spam folder is
+  indistinguishable, from the Owner's side, from one that was never sent.
 - **No CSRF token.** The session cookie is `SameSite=Strict`, which blocks the
   cross-site form-post attack in every browser this demo will run in. That is
   defence-in-depth reduced to defence-in-one-depth, and it is stated as such.
