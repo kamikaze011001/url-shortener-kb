@@ -143,18 +143,25 @@ which is exactly the asymmetry that makes sampling safe.
 
 Not triggered by load. Triggered by wanting a different product.
 
-### R-12 — Scoped API Keys
+### R-12 — Scoped API Keys — **done**
 
-**Trigger:** the first Owner who wants to hand a key to something they do not fully
-trust — a third-party integration, or a script someone else runs.
+**Trigger, as written:** the first Owner who wants to hand a key to something they do
+not fully trust — a third-party integration, or a script someone else runs.
 
-Today a key carries its Owner's full authority except managing keys
-([ADR-0019](./adr/0019-api-key-authentication.md)). Scopes — read-only, create-only,
-per-Link — were deliberately not built, because scopes invented before a use case are
-the speculative generality this page argues against everywhere else.
+**What actually pulled it in** was narrower and more concrete: a load generator, which
+needs to create Links and must do nothing else. This page said the hard part was
+*"deciding the vocabulary of scopes without a real request to shape it"* — so the
+vocabulary waited for the request, and then came out of it: `links:read` and
+`links:write`, independent, because write-without-read is precisely the credential that
+motivated the work. Built with expiry in
+[ADR-0020](./adr/0020-api-key-scopes-and-expiry.md).
 
-The shape is a `scopes` column and a check at the edge. The hard part is not the code,
-it is deciding the vocabulary of scopes without a real request to shape it.
+Worth keeping on the record: the deferral was not laziness and the trigger was not
+guessed. The item stated a test, the test was met, and the shape the item predicted —
+*"a `scopes` column and a check at the edge"* — is exactly what shipped.
+
+**What is still not built:** per-Link scopes, and scopes for anything outside Links.
+Both are waiting on the same kind of request that unblocked this one.
 
 ### R-13 — Deliverability and email as a dependency
 

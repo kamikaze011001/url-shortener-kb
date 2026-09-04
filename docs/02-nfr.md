@@ -95,6 +95,8 @@ place instead:
 | Password reset does not reveal who is registered | Identical `202` either way (FR-1.12) |
 | An attacker cannot mailbomb a stranger | Reset requests limited per IP **and** per target address (FR-6.7) |
 | A leaked API Key cannot escalate | A key may not manage API Keys, so it cannot mint more or lock the Owner out (FR-8.5) |
+| A leaked API Key is bounded in what it can do | Scopes are chosen at creation; a write-only key cannot read, a read-only key cannot write (FR-8.9) |
+| A leaked API Key is bounded in how long | An optional lifetime, checked in the authentication query itself (FR-8.7) |
 
 **Known, accepted weaknesses.** Each is a demo compromise with a named fix:
 
@@ -107,9 +109,15 @@ place instead:
   that one device" does not, because nothing distinguishes one token from another.
 - **No refresh token**, so an Owner is logged out abruptly after an hour. Fix: a
   refresh token with rotation and reuse detection. Materially more code than it looks.
-- **An API Key never expires.** Deliberate — a key that dies on a schedule breaks an
-  unattended integration at an hour nobody is awake — but it does mean a key leaked and
-  never noticed is valid forever. `lastUsedAt` is what makes that noticeable.
+- ~~**An API Key never expires.**~~ **Fixed, partly.** A key can be given a lifetime and
+  the browser offers 90 days by default ([ADR-0020](./adr/0020-api-key-scopes-and-expiry.md)).
+  A key created without one is still valid forever, because forcing expiry breaks
+  unattended integrations at an hour nobody is awake. `lastUsedAt` remains what makes an
+  unnoticed leak noticeable.
+- **An expired key and an unknown key return an identical `401`.** The API Key filter is
+  silent about failure by design, and giving it an opinion would 401 the public redirect
+  path for any client sending a stale header. The cost is real: the reason is visible
+  only in the key list (FR-8.11), which is a worse place to learn it than the response.
 - **Email delivery is not guaranteed.** A code that lands in a spam folder is
   indistinguishable, from the Owner's side, from one that was never sent.
 - **No CSRF token.** The session cookie is `SameSite=Strict`, which blocks the

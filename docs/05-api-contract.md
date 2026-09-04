@@ -88,10 +88,20 @@ machines and is part of the contract** — the frontend switches on it, so chang
 | `ALIAS_TAKEN` | 409 | Requested Alias is in the Code Namespace already |
 | `RESERVED_ALIAS` | 409 | Requested Alias is a Reserved Word |
 | `EMAIL_TAKEN` | 409 | Registration with an existing email |
+| `INVALID_CODE` | 400 | OTP is wrong, already used, or out of attempts |
+| `CODE_EXPIRED` | 400 | OTP is past its ten-minute life |
+| `EMAIL_NOT_VERIFIED` | 403 | Signed in, but the address is unconfirmed (FR-1.7) |
+| `INSUFFICIENT_SCOPE` | 403 | The API Key lacks the scope this endpoint needs (FR-8.10) |
+| `FORBIDDEN` | 403 | Allowed for a session, refused for this credential (FR-8.5) |
 | `INVALID_DESTINATION` | 422 | Not an absolute `http`/`https` URL |
 | `DESTINATION_NOT_ALLOWED` | 422 | Private Destination, or points at this service |
 | `RATE_LIMITED` | 429 | Over a limit; `Retry-After` header is present |
 | `INTERNAL` | 500 | Anything unhandled. Never leaks a stack trace. |
+
+**The three `403`s are not interchangeable.** `EMAIL_NOT_VERIFIED` says *finish setting
+up your account*, `INSUFFICIENT_SCOPE` says *this key was not given that permission*, and
+`FORBIDDEN` says *this is a session-only operation, whatever your key holds*. All three
+name a fix, which is the reason they are distinguished at all.
 
 **`NOT_FOUND` is deliberately overloaded.** Another Owner's Link returns `404`, not
 `403`, because `403` confirms the resource exists. This is the same reasoning that
