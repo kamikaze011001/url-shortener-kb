@@ -244,9 +244,16 @@ CREATE TABLE api_keys (
     key_hash     char(64)    NOT NULL,
     key_prefix   varchar(16) NOT NULL,
     key_last4    char(4)     NOT NULL,
+    scopes       text[]      NOT NULL,
+    expires_at   timestamptz NULL,
     last_used_at timestamptz NULL,
     created_at   timestamptz NOT NULL DEFAULT now(),
-    revoked_at   timestamptz NULL
+    revoked_at   timestamptz NULL,
+
+    CONSTRAINT api_keys_scopes_known CHECK (
+        cardinality(scopes) > 0
+        AND scopes <@ ARRAY['links:read', 'links:write']
+    )
 );
 
 -- The authentication lookup, on every keyed request.
@@ -262,6 +269,23 @@ arrived, find the row, or answer 401. There is no scan and no per-row comparison
 is the reason SHA-256 rather than bcrypt: a per-row bcrypt comparison cannot use an
 index at all. [ADR-0019](./adr/0019-api-key-authentication.md) explains why that is
 safe for a 256-bit random key and would not be for a password.
+
+**`scopes` is an array with a `CHECK`, not a join table.** The set is small and fixed,
+it is always read with the key, and it is never queried across keys — the normalised
+shape would buy nothing. The constraint is what makes an unknown scope unstorable, even
+by a hand-written `INSERT` that skips the application.
+
+**`expires_at` is checked in the authentication query**, not after it:
+`AND (expires_at IS NULL OR expires_at > now)`. It costs nothing on a lookup that was
+already one indexed read, and no code path can end up holding an expired key and
+forgetting to look. `NULL` means never — which is what every key created before
+[ADR-0020](./adr/0020-api-key-scopes-and-expiry.md) was backfilled to, along with every
+scope, because a migration must never narrow the authority of a credential that is
+already in use.
+
+**Expired keys are still listed.** The list filters on `revoked_at IS NULL` only. A
+revoked key was ended by a person who knows they ended it; an expired key ended on its
+own, and its Owner is the one debugging why a script stopped working (FR-8.11).
 
 **`key_prefix` and `key_last4` exist because the plaintext is gone.** An Owner with
 three keys has to be able to tell which one to revoke, and `sk_live_8f2a…c3d4` is

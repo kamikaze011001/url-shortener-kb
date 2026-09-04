@@ -52,9 +52,18 @@ scopes chosen before a use case exists are speculative generality of exactly the
 is kept: **a key cannot manage API Keys.** A leaked key therefore cannot mint more keys
 and cannot lock its Owner out — a real containment property for almost no code.
 
+> **Superseded by [ADR-0020](./0020-api-key-scopes-and-expiry.md).** The deferral had a
+> stated test — *no use case yet* — and the test was met: the load generator needs a key
+> that creates Links and does nothing else. The exception above survives unchanged, and
+> deliberately did not become a scope.
+
 **Expiring keys.** Better hygiene, worse operations: a key that dies on a schedule
 breaks an unattended integration at an hour nobody is awake, and the failure appears
 long after the decision that caused it. Revocation-only keeps a human in the loop.
+
+> **Superseded by [ADR-0020](./0020-api-key-scopes-and-expiry.md).** The objection was
+> never wrong, and it is not dismissed there — expiry is opt-in, and an expired key stays
+> visible in the list so the 3am failure can be explained rather than only suffered.
 
 ## Consequences
 

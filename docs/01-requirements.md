@@ -153,13 +153,25 @@ whole life; ownership is never transferred.
 - **FR-8.3** The key list shows a prefix and the last four characters, so keys can be
   told apart without being recoverable.
 - **FR-8.4** An Owner revokes a key. Revocation takes effect on the next request.
-- **FR-8.5** A key carries the full authority of its Owner **except** managing API
-  Keys. A leaked key cannot mint more keys, and cannot lock its Owner out.
+- **FR-8.5** A key carries the authority of its Owner **except** managing API Keys.
+  A leaked key cannot mint more keys, and cannot lock its Owner out. This holds
+  whatever the key's scopes are — it is not itself a scope.
 - **FR-8.6** A key is presented as `Authorization: Bearer <key>`. When a request
   carries both a key and a session cookie, the key wins and the cookie is ignored.
-- **FR-8.7** A key never expires. It ends when it is revoked.
+- **FR-8.7** A key is created with an optional lifetime and expires when it runs out.
+  A key created without one never expires and ends only when it is revoked.
+  See [ADR-0020](./adr/0020-api-key-scopes-and-expiry.md).
 - **FR-8.8** An Owner whose email is unverified cannot create Links with a key either.
   FR-1.7 is a property of the Owner, not of the credential.
+- **FR-8.9** A key is created with one or more **scopes**, and may use only the
+  endpoints they cover. `links:read` reads Links, their statistics and their
+  Destination history; `links:write` creates, edits, disables and deletes them.
+  Neither implies the other.
+- **FR-8.10** A request whose key lacks the required scope is refused with `403
+  INSUFFICIENT_SCOPE`, naming the scope it needed.
+- **FR-8.11** An expired key stays in the Owner's key list, shown as expired with the
+  date. It is the only place the difference between "expired" and "wrong key" is
+  visible — authentication answers an identical `401` to both.
 
 > **Why this exists at all.** The session is an `httpOnly` cookie
 > ([ADR-0014](./adr/0014-session-in-httponly-cookie.md)), which is exactly what stops a
@@ -167,9 +179,15 @@ whole life; ownership is never transferred.
 > for an automation tool, a CI job or an AI agent to authenticate with. FR-8 is the
 > second door, opened deliberately rather than by weakening the first.
 >
-> **FR-8.7 is a real trade-off.** Expiring keys are better security hygiene and worse
-> operations: a key that dies on a schedule breaks an unattended integration at an hour
-> nobody is awake. Revocation-only puts the decision in a human's hands.
+> **FR-8.7 is a real trade-off, and expiry does not settle it.** A key that dies on a
+> schedule breaks an unattended integration at an hour nobody is awake. That is why a
+> lifetime is *chosen*, never imposed, and why FR-8.11 exists: the failure is made
+> explainable rather than prevented.
+>
+> **FR-8.9 was deferred once, on a stated test.** Scopes invented before a use case are
+> speculative generality. The test was met by a real one — a load generator that creates
+> Links and must do nothing else — and the vocabulary was shaped by it rather than
+> guessed at ([ADR-0020](./adr/0020-api-key-scopes-and-expiry.md)).
 
 ## Explicit non-goals
 
