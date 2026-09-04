@@ -163,6 +163,27 @@ guessed. The item stated a test, the test was met, and the shape the item predic
 **What is still not built:** per-Link scopes, and scopes for anything outside Links.
 Both are waiting on the same kind of request that unblocked this one.
 
+### R-14 — Versioned frontend releases
+
+**Trigger:** the first frontend deploy that has to be undone, or the first one that lands
+while somebody is loading the page.
+
+The frontend deploy replaces a directory in place
+([ADR-0021](./adr/0021-containerised-app-host-installed-state.md)). It is not versioned,
+so rolling back means rebuilding from a tag, and it is not atomic, so there is a window
+in which Caddy serves a directory that is half-replaced.
+
+The shape is release directories named by build hash and a symlink swapped in place,
+keeping the last few. **Not a container:** Caddy has to serve the SPA either way, so
+containerising it adds a process and a network hop to serve 372 KB without fixing
+anything the symlink does not.
+
+Worth recording *why* this was deferred rather than missed. The argument that justified
+containerising the backend — that a rollback should not require a rebuild — applies here
+word for word, and simply was not applied to the second half of the system until someone
+asked why the two halves were treated differently. The gap is small and the fix is known;
+naming it cost less than closing it on the day.
+
 ### R-13 — Deliverability and email as a dependency
 
 **Trigger:** the first Owner who reports never receiving a code.

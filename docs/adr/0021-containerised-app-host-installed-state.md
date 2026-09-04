@@ -48,6 +48,23 @@ hostnames. That is an image, a container and a process bought for nothing.
 
 The general rule this is an instance of: **containerise processes, not files.**
 
+**That answer is incomplete, and the gap is accepted rather than unnoticed.** The reason
+given above for containerising the backend was that rollback would otherwise be a
+rebuild — and the same test, applied to the frontend, fails. Its deploy deletes the
+directory and copies a new one in: not versioned, so a rollback *is* a rebuild, and not
+atomic, so there is a brief window where Caddy serves a half-copied directory.
+
+A container is not the only fix and is the more expensive one, because Caddy has to stay
+either way — it terminates the tunnel hop and splits `/api/*` from the SPA, so a frontend
+container becomes an upstream for it rather than a replacement, adding a process and a
+network hop to serve 372 KB. The cheaper fix is versioned release directories with an
+atomic symlink swap: `releases/frontend-<hash>/` immutable, `frontend` a symlink, deploy
+by re-pointing it, roll back by pointing it back.
+
+Deferred deliberately for a demo where the frontend changes rarely and a bad deploy is
+repaired by re-running the build. It is a real gap for anything with users, and
+[06-roadmap.md](../06-roadmap.md) carries it as R-14.
+
 ## Networking, which is where the real trade-off lives
 
 The application must reach Postgres on `127.0.0.1:5432` and Redis on `127.0.0.1:6380`.
