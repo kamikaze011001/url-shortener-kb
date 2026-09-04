@@ -45,6 +45,9 @@ Every entry below was a genuine trade-off with a rejected alternative.
 | [0010](./docs/adr/0010-defer-external-url-screening.md) | Built-in SSRF guard now; external URL screening deferred behind an interface |
 | [0011](./docs/adr/0011-one-class-per-use-case.md) | One class per use case; no service layer |
 | [0012](./docs/adr/0012-modulith-verified-boundaries.md) | Module boundaries verified by Spring Modulith, not asserted |
+| [0013](./docs/adr/0013-fixed-window-rate-limiting.md) | A fixed-window counter in Redis, not a token bucket |
+| [0014](./docs/adr/0014-session-in-httponly-cookie.md) | Session in an httpOnly cookie; the frontend asks the server who it is |
+| [0015](./docs/adr/0015-utc-days-for-statistics.md) | Statistics are grouped by UTC day |
 
 ## Project constraints
 
