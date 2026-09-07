@@ -376,3 +376,13 @@ Handled from day one, because each is a two-line fix now and an hour of panic la
 
 **Deployment is the last task, and it is droppable.** If Friday runs out, the demo runs
 from `localhost` and nothing about the design changes.
+
+
+**The application runs in a container; its state does not.** Postgres and Redis are
+installed on the host and isolated per-application — a role, database and named schema
+for one, a dedicated `redis-server` on 6380 for the other. The built SPA is static files
+served by the host's Caddy, in no container: containerise processes, not files. The
+container uses `--network host`, which keeps the databases loopback-only and unchanged;
+[ADR-0021](./adr/0021-containerised-app-host-installed-state.md) records why
+`host.docker.internal` looks like it avoids that trade-off and is in fact the trade-off.
+
